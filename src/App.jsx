@@ -1,0 +1,233 @@
+import { useState, useEffect } from 'react';
+import './App.css';
+
+// Firebase Importe
+import { db } from './firebase'; 
+import { 
+  collection, 
+  addDoc, 
+  deleteDoc, 
+  doc, 
+  onSnapshot, 
+  query, 
+  orderBy 
+} from 'firebase/firestore';
+
+function App() {
+  const [entries, setEntries] = useState([]);
+  
+  // Formular States
+  const [store, setStore] = useState('');
+  const [amount, setAmount] = useState('');
+  // Datum standardmäßig auf "Heute" setzen (Format YYYY-MM-DD für das Input-Feld)
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [isPaidByTimo, setIsPaidByTimo] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  // 1. DATEN LADEN
+  useEffect(() => {
+    const q = query(collection(db, "shoppingEntries"), orderBy("date", "desc"));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedEntries = snapshot.docs.map(doc => ({
+        id: doc.id, 
+        ...doc.data()
+      }));
+      setEntries(loadedEntries);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. NEUEN EINTRAG ERSTELLEN
+  const addEntry = async (e) => {
+    e.preventDefault();
+    if (!store || !amount || !date) return;
+
+    await addDoc(collection(db, "shoppingEntries"), {
+      store: store,
+      amount: parseFloat(amount.replace(',', '.')),
+      date: date, // Wir nehmen das gewählte Datum vom Input
+      isPaidByTimo: isPaidByTimo // Speichern, ob Timo schon ausgelegt hat
+    });
+
+    // Formular zurücksetzen (Datum lassen wir auf dem gewählten stehen, das ist oft praktischer)
+    setStore('');
+    setAmount('');
+    setIsPaidByTimo(false);
+  };
+
+  const deleteEntry = async (id) => {
+    await deleteDoc(doc(db, "shoppingEntries", id));
+    setSelectedIds(selectedIds.filter(itemId => itemId !== id));
+  };
+
+  const toggleSelection = (id) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter(itemId => itemId !== id));
+    } else {
+      setSelectedIds([...selectedIds, id]);
+    }
+  };
+
+  const markSelectedAsPaid = async () => {
+    const deletePromises = selectedIds.map(id => 
+      deleteDoc(doc(db, "shoppingEntries", id))
+    );
+    await Promise.all(deletePromises);
+    setSelectedIds([]);
+  };
+
+  // --- BERECHNUNGEN & GRUPPIERUNG ---
+
+  const selectedTotal = entries
+    .filter(entry => selectedIds.includes(entry.id))
+    .reduce((sum, entry) => sum + entry.amount, 0);
+
+  // Hier passiert die Magie für deine Anforderung:
+  const groupedEntries = entries.reduce((groups, entry) => {
+    let groupKey = "";
+
+    // WENN Timo schon bezahlt hat -> Eigene Gruppe
+    if (entry.isPaidByTimo) {
+      groupKey = "💸 Bereits von Timo bezahlt";
+    } 
+    // SONST -> Normal nach Monat sortieren
+    else {
+      const entryDate = new Date(entry.date);
+      groupKey = entryDate.toLocaleString('de-DE', { month: 'long', year: 'numeric' });
+    }
+    
+    if (!groups[groupKey]) groups[groupKey] = [];
+    groups[groupKey].push(entry);
+    return groups;
+  }, {});
+
+  // Hilfsfunktion: Sortiert die Gruppen so, dass "Bereits von Timo bezahlt" immer oben ist
+  const sortedGroupKeys = Object.keys(groupedEntries).sort((a, b) => {
+    if (a.includes("Bereits von Timo")) return -1; // Timo immer nach oben
+    if (b.includes("Bereits von Timo")) return 1;
+    return 0; // Ansonsten lassen wir die Sortierung so (meistens nach Erstellung/Datum ok)
+  });
+
+  const formatMoney = (val) => 
+    new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(val);
+
+  return (
+    <div className="container">
+      <h1>🔥 Einkaufs-Tracker</h1>
+      
+      {/* FORMULAR */}
+      <div className="card add-form">
+        <h2>Neuer Eintrag</h2>
+        <form onSubmit={addEntry} className="form-grid">
+          {/* Zeile 1: Laden und Betrag */}
+          <div className="form-row">
+            <input 
+              type="text" 
+              placeholder="Laden" 
+              value={store}
+              onChange={(e) => setStore(e.target.value)}
+              required
+            />
+            <input 
+              type="number" 
+              step="0.01" 
+              placeholder="Betrag" 
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              required
+            />
+          </div>
+
+          {/* Zeile 2: Datum und Checkbox */}
+          <div className="form-row">
+            <input 
+              type="date" 
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              required
+            />
+            <label className="checkbox-label">
+              <input 
+                type="checkbox" 
+                checked={isPaidByTimo}
+                onChange={(e) => setIsPaidByTimo(e.target.checked)}
+              />
+              Habe ich schon ausgelegt
+            </label>
+          </div>
+
+          <button type="submit">Hinzufügen</button>
+        </form>
+      </div>
+
+      {/* INFO BOX */}
+      <div className="card sticky-summary">
+        <h3>Abrechnung für Mama</h3>
+        <p>Ausgewählt: <strong>{selectedIds.length}</strong> Posten</p>
+        <p className="big-price">{formatMoney(selectedTotal)}</p>
+        {selectedIds.length > 0 && (
+            <button onClick={markSelectedAsPaid} className="pay-btn">
+              Als "Erledigt" markieren (Löschen)
+            </button>
+        )}
+      </div>
+
+      {/* LISTE */}
+      <div className="entries-list">
+        {entries.length === 0 && <p style={{textAlign: 'center'}}>Keine offenen Posten.</p>}
+        
+        {sortedGroupKeys.map(groupName => {
+            const monthTotal = groupedEntries[groupName].reduce((sum, e) => sum + e.amount, 0);
+            
+            // Style-Check: Ist es die Timo-Gruppe?
+            const isTimoGroup = groupName.includes("Bereits von Timo");
+
+            return (
+              <div key={groupName} className={`month-group ${isTimoGroup ? 'special-group' : ''}`}>
+                <div className="month-header">
+                    <h3>{groupName}</h3>
+                    <span>Gesamt: {formatMoney(monthTotal)}</span>
+                </div>
+                
+                {groupedEntries[groupName].map(entry => (
+                  <div 
+                    key={entry.id} 
+                    className={`entry-item ${selectedIds.includes(entry.id) ? 'selected' : ''}`}
+                    onClick={() => toggleSelection(entry.id)}
+                  >
+                    <input 
+                        type="checkbox" 
+                        checked={selectedIds.includes(entry.id)} 
+                        readOnly 
+                    />
+                    <div className="entry-info">
+                        <span className="store">{entry.store}</span>
+                        <span className="date">
+                          {new Date(entry.date).toLocaleDateString()} 
+                          {entry.isPaidByTimo && <span className="badge">Ausgelegt</span>}
+                        </span>
+                    </div>
+                    <span className="amount">{formatMoney(entry.amount)}</span>
+                    <button 
+                        className="delete-btn"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            deleteEntry(entry.id);
+                        }}
+                    >
+                        🗑️
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export default App;
