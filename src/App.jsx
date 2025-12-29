@@ -1,17 +1,7 @@
 import { useState, useEffect } from 'react';
 import './App.css';
-
-// Firebase Importe
 import { db } from './firebase'; 
-import { 
-  collection, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy 
-} from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 function App() {
   const [entries, setEntries] = useState([]);
@@ -19,24 +9,19 @@ function App() {
   // Formular States
   const [store, setStore] = useState('');
   const [amount, setAmount] = useState('');
-  // Datum standardmäßig auf "Heute" setzen (Format YYYY-MM-DD für das Input-Feld)
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [isPaidByTimo, setIsPaidByTimo] = useState(false);
+  const [isCredit, setIsCredit] = useState(false); // NEU: Ist es ein Gutschein?
 
   const [selectedIds, setSelectedIds] = useState([]);
 
   // 1. DATEN LADEN
   useEffect(() => {
     const q = query(collection(db, "shoppingEntries"), orderBy("date", "desc"));
-    
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedEntries = snapshot.docs.map(doc => ({
-        id: doc.id, 
-        ...doc.data()
-      }));
+      const loadedEntries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setEntries(loadedEntries);
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -45,17 +30,25 @@ function App() {
     e.preventDefault();
     if (!store || !amount || !date) return;
 
+    // Logik: Wenn "Gutschrift" angehakt ist, machen wir ein Minus davor
+    let finalAmount = parseFloat(amount.replace(',', '.'));
+    if (isCredit) {
+      finalAmount = -Math.abs(finalAmount); // Erzwingt negativen Wert
+    } else {
+      finalAmount = Math.abs(finalAmount); // Erzwingt positiven Wert
+    }
+
     await addDoc(collection(db, "shoppingEntries"), {
       store: store,
-      amount: parseFloat(amount.replace(',', '.')),
-      date: date, // Wir nehmen das gewählte Datum vom Input
-      isPaidByTimo: isPaidByTimo // Speichern, ob Timo schon ausgelegt hat
+      amount: finalAmount,
+      date: date,
+      isPaidByTimo: isPaidByTimo 
     });
 
-    // Formular zurücksetzen (Datum lassen wir auf dem gewählten stehen, das ist oft praktischer)
     setStore('');
     setAmount('');
     setIsPaidByTimo(false);
+    setIsCredit(false); // Reset
   };
 
   const deleteEntry = async (id) => {
@@ -72,29 +65,21 @@ function App() {
   };
 
   const markSelectedAsPaid = async () => {
-    const deletePromises = selectedIds.map(id => 
-      deleteDoc(doc(db, "shoppingEntries", id))
-    );
+    const deletePromises = selectedIds.map(id => deleteDoc(doc(db, "shoppingEntries", id)));
     await Promise.all(deletePromises);
     setSelectedIds([]);
   };
 
-  // --- BERECHNUNGEN & GRUPPIERUNG ---
-
+  // --- BERECHNUNGEN ---
   const selectedTotal = entries
     .filter(entry => selectedIds.includes(entry.id))
     .reduce((sum, entry) => sum + entry.amount, 0);
 
-  // Hier passiert die Magie für deine Anforderung:
   const groupedEntries = entries.reduce((groups, entry) => {
     let groupKey = "";
-
-    // WENN Timo schon bezahlt hat -> Eigene Gruppe
     if (entry.isPaidByTimo) {
       groupKey = "💸 Bereits von Timo bezahlt";
-    } 
-    // SONST -> Normal nach Monat sortieren
-    else {
+    } else {
       const entryDate = new Date(entry.date);
       groupKey = entryDate.toLocaleString('de-DE', { month: 'long', year: 'numeric' });
     }
@@ -104,11 +89,10 @@ function App() {
     return groups;
   }, {});
 
-  // Hilfsfunktion: Sortiert die Gruppen so, dass "Bereits von Timo bezahlt" immer oben ist
   const sortedGroupKeys = Object.keys(groupedEntries).sort((a, b) => {
-    if (a.includes("Bereits von Timo")) return -1; // Timo immer nach oben
+    if (a.includes("Bereits von Timo")) return -1;
     if (b.includes("Bereits von Timo")) return 1;
-    return 0; // Ansonsten lassen wir die Sortierung so (meistens nach Erstellung/Datum ok)
+    return 0; 
   });
 
   const formatMoney = (val) => 
@@ -120,13 +104,12 @@ function App() {
       
       {/* FORMULAR */}
       <div className="card add-form">
-        <h2>Neuer Eintrag</h2>
+        <h2>Neuer Eintrag / Gutschein</h2>
         <form onSubmit={addEntry} className="form-grid">
-          {/* Zeile 1: Laden und Betrag */}
           <div className="form-row">
             <input 
               type="text" 
-              placeholder="Laden" 
+              placeholder={isCredit ? "Grund (z.B. Eltern Gutschein)" : "Laden"}
               value={store}
               onChange={(e) => setStore(e.target.value)}
               required
@@ -141,7 +124,6 @@ function App() {
             />
           </div>
 
-          {/* Zeile 2: Datum und Checkbox */}
           <div className="form-row">
             <input 
               type="date" 
@@ -149,17 +131,36 @@ function App() {
               onChange={(e) => setDate(e.target.value)}
               required
             />
-            <label className="checkbox-label">
+          </div>
+
+          {/* CHECKBOXEN */}
+          <div className="form-row checkboxes-row">
+             <label className={`checkbox-label ${isCredit ? 'active-credit' : ''}`}>
+              <input 
+                type="checkbox" 
+                checked={isCredit}
+                onChange={(e) => {
+                  setIsCredit(e.target.checked);
+                  if(e.target.checked) setIsPaidByTimo(false); // Nicht beides gleichzeitig
+                }}
+              />
+              🎁 Ist Gutschrift
+            </label>
+
+            <label className="checkbox-label" style={{opacity: isCredit ? 0.5 : 1}}>
               <input 
                 type="checkbox" 
                 checked={isPaidByTimo}
+                disabled={isCredit}
                 onChange={(e) => setIsPaidByTimo(e.target.checked)}
               />
-              Habe ich schon ausgelegt
+              Habe ich ausgelegt
             </label>
           </div>
 
-          <button type="submit">Hinzufügen</button>
+          <button type="submit" className={isCredit ? 'btn-credit' : ''}>
+            {isCredit ? 'Gutschrift speichern' : 'Hinzufügen'}
+          </button>
         </form>
       </div>
 
@@ -167,59 +168,51 @@ function App() {
       <div className="card sticky-summary">
         <h3>Abrechnung für Mama</h3>
         <p>Ausgewählt: <strong>{selectedIds.length}</strong> Posten</p>
-        <p className="big-price">{formatMoney(selectedTotal)}</p>
+        <p className={`big-price ${selectedTotal < 0 ? 'is-credit' : ''}`}>
+            {formatMoney(selectedTotal)}
+        </p>
         {selectedIds.length > 0 && (
             <button onClick={markSelectedAsPaid} className="pay-btn">
-              Als "Erledigt" markieren (Löschen)
+              Als "Erledigt" markieren
             </button>
         )}
       </div>
 
       {/* LISTE */}
       <div className="entries-list">
-        {entries.length === 0 && <p style={{textAlign: 'center'}}>Keine offenen Posten.</p>}
-        
         {sortedGroupKeys.map(groupName => {
             const monthTotal = groupedEntries[groupName].reduce((sum, e) => sum + e.amount, 0);
-            
-            // Style-Check: Ist es die Timo-Gruppe?
             const isTimoGroup = groupName.includes("Bereits von Timo");
 
             return (
               <div key={groupName} className={`month-group ${isTimoGroup ? 'special-group' : ''}`}>
                 <div className="month-header">
                     <h3>{groupName}</h3>
-                    <span>Gesamt: {formatMoney(monthTotal)}</span>
+                    <span>Bilanz: {formatMoney(monthTotal)}</span>
                 </div>
                 
                 {groupedEntries[groupName].map(entry => (
                   <div 
                     key={entry.id} 
-                    className={`entry-item ${selectedIds.includes(entry.id) ? 'selected' : ''}`}
+                    className={`entry-item ${selectedIds.includes(entry.id) ? 'selected' : ''} ${entry.amount < 0 ? 'credit-item' : ''}`}
                     onClick={() => toggleSelection(entry.id)}
                   >
-                    <input 
-                        type="checkbox" 
-                        checked={selectedIds.includes(entry.id)} 
-                        readOnly 
-                    />
+                    <input type="checkbox" checked={selectedIds.includes(entry.id)} readOnly />
                     <div className="entry-info">
                         <span className="store">{entry.store}</span>
                         <span className="date">
                           {new Date(entry.date).toLocaleDateString()} 
                           {entry.isPaidByTimo && <span className="badge">Ausgelegt</span>}
+                          {entry.amount < 0 && <span className="badge green">Gutschrift</span>}
                         </span>
                     </div>
-                    <span className="amount">{formatMoney(entry.amount)}</span>
+                    <span className={`amount ${entry.amount < 0 ? 'green-text' : ''}`}>
+                        {formatMoney(entry.amount)}
+                    </span>
                     <button 
                         className="delete-btn"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            deleteEntry(entry.id);
-                        }}
-                    >
-                        🗑️
-                    </button>
+                        onClick={(e) => { e.stopPropagation(); deleteEntry(entry.id); }}
+                    >🗑️</button>
                   </div>
                 ))}
               </div>

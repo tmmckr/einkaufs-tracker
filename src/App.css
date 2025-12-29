@@ -171,3 +171,38 @@ button {
   border-radius: 4px;
   margin-left: 8px;
 }
+
+/* Styling für die Gutschrift-Logik */
+.checkboxes-row {
+  display: flex;
+  gap: 10px;
+}
+
+.active-credit {
+  background-color: #d1fae5; /* Helles Grün */
+  border-color: #10b981;
+  color: #065f46;
+  font-weight: bold;
+}
+
+.btn-credit {
+  background-color: #10b981 !important; /* Grüner Button */
+}
+
+/* Grüne Texte für Guthaben */
+.green-text {
+  color: #10b981;
+}
+
+.badge.green {
+  background-color: #10b981;
+}
+
+.credit-item {
+  border-left: 4px solid #10b981; /* Grüner Balken links */
+}
+
+/* Wenn die Gesamtsumme negativ ist (Mama kriegt noch Geld von dir) */
+.big-price.is-credit {
+  color: #10b981;
+}
